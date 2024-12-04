@@ -1,4 +1,3 @@
-pub use chromiumoxide::Page;
 
 pub mod error;
 pub mod utils;
@@ -13,11 +12,20 @@ mod tests {
 
     #[tokio::test]
     async fn it_works() {
-        let mut bs = browser::BrowserSession::from_default_config().await.unwrap();
-        let _= bs.set_proxy("UGKzXr:oe6JcB@87.247.146.147:8000").await;
+        let mut bs = BrowserSession::launch_with_default_config()
+            .await
+            .unwrap();
+
+        bs.set_proxy("UeKzXo:Me1JcB@87.245.144.147:8000")
+            .await
+            .unwrap();
+
         let myip = bs.myip().await.unwrap();
+
         bs.close().await;
-        println!("myip: {:#?}", myip);
+
+        println!("{:#?}", myip);
+
         assert_eq!((), ());
     }
 }
