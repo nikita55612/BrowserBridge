@@ -1,4 +1,6 @@
 pub use chromiumoxide::Page;
 
-pub mod browser;
+mod browser;
 mod extension;
+
+pub use browser::*;
