@@ -2,7 +2,7 @@
 
 A crate written in Rust for automating browser interactions. It serves as a wrapper around the [chromiumoxide](https://github.com/mattsse/chromiumoxide) crate, which utilizes the [Chrome DevTools Protocol](https://chromedevtools.github.io/devtools-protocol/) to control and launch Chromium or Chrome browsers (including headless mode).
 
-BrowserBridge enhances functionality with its custom Google Chrome extension, enabling features such as proxy switching and complete browser data removal.
+*BrowserBridge* enhances functionality with its custom Google Chrome extension, enabling features such as proxy switching and complete browser data removal.
 
 ## Examples
 ```rust
