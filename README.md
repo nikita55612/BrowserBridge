@@ -7,6 +7,7 @@ use browser_bridge::*;
 
 #[tokio::main]
 async fn main() -> Result<(), BrowserError> {
+
     let config = BrowserSessionConfig::default();
     let bs = BrowserSession::launch(bsc).await?;
     
