@@ -28,10 +28,10 @@ async fn main() -> Result<(), BrowserError> {
     let _ = bs.clear_data().await;
     
     let param = PageParam::new(
-        Some("username:password@host:port"), 
-        Some("Mozilla/5.0 (Windows NT 10.0; rv:110.0) Gecko/20100101 Firefox/110.0"), 
-        Some(vec![CookieParam::new("Api-Token", "r.Wd34dO5pgmfcc4Moe94Fvdf431")]), 
-        Some(2000)
+        proxy: Some("username:password@host:port"), 
+        user_agent: Some("Mozilla/5.0 (Windows NT 10.0; rv:110.0) Gecko/20100101 Firefox/110.0"), 
+        cookies: Some(vec![CookieParam::new("Api-Token", "r.Wd34dO5pgmfcc4Moe94Fvdf431")]), 
+        duration: Some(2000)
     );
     bs.open_with_param("https://www.google.com/", param).await?;
     let _ = bs.reset_proxy().await;
