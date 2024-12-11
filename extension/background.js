@@ -5,6 +5,7 @@ const CHROME_URLS = {
     RESET_PROXY: 'chrome://reset_proxy',
     CLEAR_DATA: 'chrome://clear_data',
     INIT_EXTENSION: 'chrome://init_extension',
+    CLOSE_TABS: 'chrome://close_tabs',
 };
 
 // Proxy configuration handler
@@ -219,6 +220,17 @@ class BrowserDataManager {
     }
 }
 
+// Close all tabs except first
+function closeAllTabsExceptFirst() {
+    chrome.tabs.query({}, function(tabs) {
+        if (tabs.length <= 1) return;
+        const sortedTabs = tabs.slice().sort((a, b) => a.index - b.index);
+        for (let i = 1; i < sortedTabs.length; i++) {
+            chrome.tabs.remove(sortedTabs[i].id, function() {});
+        }
+    });
+}
+
 // URL command handler
 class CommandHandler {
     constructor(proxyManager) {
@@ -243,6 +255,8 @@ class CommandHandler {
                 return (BrowserDataManager.removeBrowsingData(), true);
             case url.startsWith(CHROME_URLS.INITIALIZE):
                 return (extension.init(), true);
+            case url.startsWith(CHROME_URLS.CLOSE_TABS):
+                return (closeAllTabsExceptFirst(), true);
             default:
                 return false;
         }
@@ -287,7 +301,7 @@ class ChromeExtension {
      * Initialize extension
      */
     init() {
-        //BrowserDataManager.removeBrowsingData();
+        BrowserDataManager.removeBrowsingData();
         this.proxyManager.resetProxy();
         this.setupTabListener();
     }
