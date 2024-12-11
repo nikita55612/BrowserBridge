@@ -365,7 +365,7 @@ impl BrowserSession {
     /// let cookies = vec![CookieParam { ... }];
     /// let params = PageParam {
     ///     cookies: Some(cookies),
-    ///     user_agent: Some("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36".to_string()),
+    ///     user_agent: Some("Mozilla/5.0 (Windows NT 10.0; Win64; x64) ...".to_string()),
     ///     duration: Some(5000),
     /// };
     /// let page = session.open_with_param("https://example.com", params).await?;
@@ -541,6 +541,22 @@ impl BrowserSession {
     /// A `Result` indicating success or a `BrowserError`
     pub async fn reset_proxy(&self) -> Result<(), BrowserError> {
         if let Err(e) = self.browser.new_page("chrome://reset_proxy").await {
+            let error = BrowserError::from(e);
+            match error {
+                BrowserError::NetworkIO => {},
+                _ => { return Err(error); }
+            }
+        }
+        sleep(Duration::from_millis(100)).await;
+        Ok(())
+    }
+
+    /// Close all tabs except first
+    ///
+    /// # Returns
+    /// A `Result` indicating success or a `BrowserError`
+    pub async fn close_tabs(&self) -> Result<(), BrowserError> {
+        if let Err(e) = self.browser.new_page("chrome://close_tabs").await {
             let error = BrowserError::from(e);
             match error {
                 BrowserError::NetworkIO => {},
