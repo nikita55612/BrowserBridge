@@ -1,18 +1,16 @@
-#![warn(missing_docs)]
-
-use std::{collections::HashSet, future::Future, time::Duration};
+//#![warn(missing_docs)]
+use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tokio_stream::StreamExt;
 use tokio::{
-    task::JoinHandle, 
+    task::JoinHandle,
     time::{sleep, timeout}
 };
 use chromiumoxide::{
-    Browser, 
-    BrowserConfig
-};
-pub use chromiumoxide::{
-    cdp::browser_protocol::network::CookieParam, 
+    cdp::browser_protocol::network::CookieParam,
+    browser::HeadlessMode,
+    Browser,
+    BrowserConfig,
     Page
 };
 use rand::Rng;
@@ -21,30 +19,14 @@ pub use crate::error::BrowserError;
 use super::extension;
 
 
-/// Represents IP information retrieved from an IP lookup service
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct MyIP {
-    /// The IP address
     pub ip: String,
-    /// The country name
     pub country: String,
-    /// The country code
     pub cc: String,
 }
 
-/// Defines the headless mode for browser operation
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum HeadlessMode {
-    /// Browser runs with a visible UI
-    False,
-    /// Browser runs fully headless (no UI)
-    True,
-    /// Browser runs in a new headless mode
-    New,
-}
-
-static DEFAULT_ARGS: [&str; 16] = [
+pub static DEFAULT_ARGS: [&str; 16] = [
     "--disable-background-networking",
     "--enable-features=NetworkService,NetworkServiceInProcess",
     "--disable-client-side-phishing-detection",
@@ -63,67 +45,66 @@ static DEFAULT_ARGS: [&str; 16] = [
     "--disable-smooth-scrolling"
 ];
 
-/// Configuration for browser session timings
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(default)]
+#[derive(Clone, Debug)]
 pub struct BrowserTimings {
-    /// Sleep duration after browser launch (in milliseconds)
-    launch_sleep: u64,
-    /// Sleep duration after setting proxy (in milliseconds)
-    set_proxy_sleep: u64,
-    /// Sleep duration after page load (in milliseconds)
-    page_sleep: u64,
-    /// Timeout for page navigation (in milliseconds)
-    wait_page_timeout: u64,
-}
-
-impl BrowserTimings {
-    /// New configuration for browser session timings
-    pub fn new(
-        launch_sleep: u64, 
-        set_proxy_sleep: u64, 
-        page_sleep: u64, 
-        wait_page_timeout: u64
-    ) -> Self {
-        Self {
-            launch_sleep,
-            set_proxy_sleep,
-            page_sleep,
-            wait_page_timeout
-        }
-    }
+    pub launch_sleep: u64,
+    pub set_proxy_sleep: u64,
+    pub action_sleep: u64,
+    pub wait_page_timeout: u64,
 }
 
 impl Default for BrowserTimings {
     fn default() -> Self {
         Self {
-            launch_sleep: 200, 
-            set_proxy_sleep: 300, 
-            page_sleep: 250, 
-            wait_page_timeout: 500
+            launch_sleep: 280,
+            set_proxy_sleep: 180,
+            action_sleep: 80,
+            wait_page_timeout: 700
         }
     }
 }
 
-/// Comprehensive browser session configuration
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(default)]
+pub struct BrowserSession {
+    pub browser: Browser,
+    pub handle: JoinHandle<()>,
+    pub timings: BrowserTimings,
+}
+
+#[derive(Clone, Debug)]
+pub struct PageParam<'a> {
+    pub proxy: Option<&'a str>,
+    pub wait_for_element: Option<(&'a str, u64)>,
+    pub user_agent: Option<&'a str>,
+    pub cookies: Vec<CookieParam>,
+    pub stealth_mode: bool,
+    pub duration: u64
+}
+
+impl<'a> Default for PageParam<'a> {
+    fn default() -> Self {
+        Self {
+            proxy: None,
+            wait_for_element: None,
+            user_agent: None,
+            cookies: Vec::new(),
+            stealth_mode: false,
+            duration: 0
+        }
+    }
+}
+
 pub struct BrowserSessionConfig {
-    /// Path to Chrome/Chromium executable
     pub executable: Option<String>,
-    /// Headless mode setting
-    pub headless: HeadlessMode,
-    /// Additional browser launch arguments
     pub args: Vec<String>,
-    /// Browser extensions to load
+    pub headless: HeadlessMode,
+    pub sandbox: bool,
     pub extensions: Vec<String>,
-    /// Whether to use incognito mode
     pub incognito: bool,
-    /// User data directory
     pub user_data_dir: Option<String>,
-    /// Timeout for browser launch
+    pub port: u16,
     pub launch_timeout: u64,
-    /// Timing configurations
+    pub request_timeout: u64,
+    pub cache_enabled: bool,
     pub timings: BrowserTimings,
 }
 
@@ -131,121 +112,83 @@ impl Default for BrowserSessionConfig {
     fn default() -> Self {
         Self {
             executable: None,
-            headless: HeadlessMode::False,
             args: DEFAULT_ARGS.into_iter()
-                .map(|v| v.to_string())
+                .map(|v| v.into())
                 .collect(),
+            headless: HeadlessMode::False,
+            sandbox: false,
             extensions: Vec::new(),
             incognito: false,
             user_data_dir: None,
+            port: 0,
             launch_timeout: 1500,
+            request_timeout: 2000,
+            cache_enabled: true,
             timings: BrowserTimings::default(),
         }
     }
 }
 
-impl From<BrowserSessionConfig> for BrowserConfig {
-    fn from(bsc: BrowserSessionConfig) -> Self {
+pub trait FromSessionConfig {
+    fn to_config(&self) -> Result<BrowserConfig, BrowserError>;
+}
+
+impl FromSessionConfig for BrowserSessionConfig {
+    fn to_config(&self) -> Result<BrowserConfig, BrowserError> {
         let mut extensions = Vec::new();
-        extensions.push(
-            extension::PATH.lock()
-                .as_deref()
-                .map(|v| v.clone())
-                .unwrap_or(String::new())
+        extensions.push(extension::PATH.clone());
+        extensions.extend_from_slice(
+            self.extensions.as_slice()
         );
-        extensions.extend_from_slice(bsc.extensions.as_slice());
-
-        let headless = match bsc.headless {
-            HeadlessMode::False => chromiumoxide::browser::HeadlessMode::False,
-            HeadlessMode::True=> chromiumoxide::browser::HeadlessMode::True,
-            HeadlessMode::New=> chromiumoxide::browser::HeadlessMode::New,
-        };
-
-        let mut args = bsc.args.iter()
-            .map(|v| v.as_str())
-            .collect::<Vec<_>>();
-        args.extend_from_slice(&DEFAULT_ARGS);
-        let args = args.into_iter().collect::<HashSet<_>>();
-
         let mut builder = BrowserConfig::builder()
             .disable_default_args()
-            .headless_mode(headless)
-            .args(args)
+            .headless_mode(self.headless)
+            .args(&self.args)
             .extensions(extensions)
             .viewport(None)
-            .launch_timeout(Duration::from_millis(bsc.launch_timeout));
+            .port(self.port)
+            .launch_timeout(
+                Duration::from_millis(self.launch_timeout)
+            )
+            .request_timeout(
+                Duration::from_millis(self.request_timeout)
+            );
 
-        if bsc.incognito { builder = builder.incognito(); }
-        if bsc.user_data_dir.is_some() { 
-            builder = builder.user_data_dir(bsc.user_data_dir.unwrap()); 
+        if self.incognito {
+            builder = builder.incognito();
         }
-        if bsc.executable.is_some() { 
-            builder = builder.chrome_executable(bsc.executable.unwrap()); 
+        if !self.sandbox {
+            builder = builder.no_sandbox();
+        }
+        if self.cache_enabled {
+            builder = builder.enable_cache();
+        }
+        if let Some(user_data_dir) = &self.user_data_dir {
+            builder = builder.user_data_dir(user_data_dir);
+        }
+        if let Some(executable) = &self.executable {
+            builder = builder.chrome_executable(executable);
         }
 
-        builder.build().unwrap()
-    }
-}
-
-/// Represents a browser automation session
-pub struct BrowserSession {
-    /// The Chromium browser instance
-    pub browser: Browser,
-    /// Tokio task handle for browser management
-    pub handle: JoinHandle<()>,
-    /// Session timing configurations
-    timings: BrowserTimings,
-}
-
-/// Parameters for page initialization
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-#[serde(default)]
-pub struct PageParam<'a> {
-    /// Optional page proxy address
-    pub proxy: Option<&'a str>,
-    /// Optional user agent string
-    pub user_agent: Option<&'a str>,
-    /// Optional cookies to set
-    pub cookies: Option<Vec<CookieParam>>,
-    /// Optional duration to keep the page open
-    pub duration: Option<u64>
-}
-
-impl<'a> PageParam<'a> {
-    /// New parameters for page initialization
-    pub fn new(
-        proxy: Option<&'a str>,
-        user_agent: Option<&'a str>, 
-        cookies: Option<Vec<CookieParam>>, 
-        duration: Option<u64>
-    ) -> Self {
-        Self {
-            proxy,
-            user_agent,
-            cookies,
-            duration
-        }
+        builder.build()
+            .map_err(|_| BrowserError::BuildBrowserConfigError)
     }
 }
 
 impl BrowserSession {
-    /// Launch a new browser session with custom configuration
-    ///
-    /// # Examples
-    /// ```rust
-    /// let config = BrowserSessionConfig::default();
-    /// let session = BrowserSession::launch(config).await?;
-    /// ```
     pub async fn launch(bsc: BrowserSessionConfig) -> Result<Self, BrowserError> {
         let timings = bsc.timings.clone();
         let (browser, mut handler) = Browser::launch(
-            BrowserConfig::from(bsc)
+            bsc.to_config()?
         ).await?;
         let handle = tokio::task::spawn(async move {
             while handler.next().await.is_some() {}
         });
-        sleep(Duration::from_millis(timings.launch_sleep)).await;
-        Ok(
+        sleep(
+            Duration::from_millis(timings.launch_sleep)
+        ).await;
+
+        Ok (
             Self {
                 browser,
                 handle,
@@ -254,32 +197,15 @@ impl BrowserSession {
         )
     }
 
-    /// Launch a new browser session with default configuration
     pub async fn launch_with_default_config() -> Result<Self, BrowserError> {
-        let bsc = BrowserSessionConfig::default();
-        Self::launch(bsc).await
+        let config = BrowserSessionConfig::default();
+        Self::launch(config).await
     }
 
-    /// Update the timing configuration for the browser session
-    ///
-    /// # Parameters
-    /// - `timings`: New `BrowserTimings` to be applied to the session
-    ///
-    /// # Examples
-    /// ```rust
-    /// session.set_timings(BrowserTimings {
-    ///     page_sleep: 1000, // 1 second sleep after page load
-    ///     ..session.timings
-    /// }).await;
-    /// ```
     pub async fn set_timings(&mut self, timings: BrowserTimings) {
         self.timings = timings;
     }
 
-    /// Gracefully close the browser session
-    ///
-    /// Attempts to close the browser and clean up resources. If the initial 
-    /// close fails, it will attempt to forcefully kill the browser process.
     pub async fn close(&mut self) {
         if self.browser.close().await.is_err() {
             self.browser.kill().await;
@@ -293,236 +219,65 @@ impl BrowserSession {
         self.handle.abort();
     }
 
-    /// Create a new browser page with stealth mode and random user agent
-    ///
-    /// # Returns
-    /// A `Result` containing the new `Page` or a `BrowserError`
     pub async fn new_page(&self) -> Result<Page, BrowserError> {
         let new_page = self.browser.new_page("about:blank").await?;
-        let user_agent = get_random_user_agent();
-        new_page.enable_stealth_mode_with_agent(user_agent).await?;
         Ok(new_page)
     }
 
-    /// Open a URL on an existing page with timeout and sleep
-    ///
-    /// # Parameters
-    /// - `url`: The URL to navigate to
-    /// - `page`: The page to navigate
-    ///
-    /// # Returns
-    /// A `Result` containing the page reference or a `BrowserError`
-    ///
-    /// # Examples
-    /// ```rust
-    /// let page = session.new_page().await?;
-    /// let session_id = page.session_id();
-    /// session.open_on_page("https://example.com", &page).await?;
-    /// ```
-    pub async fn open_on_page<'a>(
-        &self, url: &str, page: &'a Page
-    ) -> Result<&'a Page, BrowserError> {
+    pub async fn open_on_page<'a>(&self, url: &str, page: &'a Page) -> Result<(), BrowserError> {
         page.goto(url).await?;
         let _ = timeout(
-            Duration::from_millis(self.timings.wait_page_timeout), 
-            {
-                page.wait_for_navigation()
-            }
+            Duration::from_millis(self.timings.wait_page_timeout),
+            page.wait_for_navigation()
         ).await;
-        sleep(Duration::from_millis(self.timings.page_sleep)).await;
-        Ok(page)
+
+        Ok(())
     }
 
-    /// Open a new page and navigate to a URL
-    ///
-    /// # Parameters
-    /// - `url`: The URL to navigate to
-    ///
-    /// # Returns
-    /// A `Result` containing the new page or a `BrowserError`
-    ///
-    /// # Examples
-    /// ```rust
-    /// let page = session.open("https://example.com").await?;
-    /// ```
     pub async fn open(&self, url: &str) -> Result<Page, BrowserError> {
         let page = self.new_page().await?;
         self.open_on_page(url, &page).await?;
+
         Ok(page)
     }
 
-    /// Open a page with advanced configuration options
-    ///
-    /// # Parameters
-    /// - `url`: The URL to navigate to
-    /// - `param`: Page parameters including cookies, user agent, duration
-    ///
-    /// # Returns
-    /// A `Result` containing the new page or a `BrowserError`
-    ///
-    /// # Examples
-    /// ```rust
-    /// let cookies = vec![CookieParam { ... }];
-    /// let params = PageParam {
-    ///     cookies: Some(cookies),
-    ///     user_agent: Some("Mozilla/5.0 (Windows NT 10.0; Win64; x64) ...".to_string()),
-    ///     duration: Some(5000),
-    /// };
-    /// let page = session.open_with_param("https://example.com", params).await?;
-    /// ```
-    pub async fn open_with_param<'a>(&self, url: &str, param: PageParam<'a>) -> Result<Page, BrowserError> {
+    pub async fn open_with_duration(&self, url: &str, duration: u64) -> Result<Page, BrowserError> {
+        let page = self.new_page().await?;
+        self.open_on_page(url, &page).await?;
+        sleep(
+            Duration::from_millis(duration)
+        ).await;
+
+        Ok(page)
+    }
+
+    pub async fn open_with_param<'a>(&self, url: &str, param: &PageParam<'a>) -> Result<Page, BrowserError> {
         if let Some(proxy) = param.proxy {
             self.set_proxy(proxy).await?;
         }
         let page = self.new_page().await?;
-        if let Some(cookies) = param.cookies {
-            page.set_cookies(cookies).await?;
-        }
         if let Some(user_agent) = param.user_agent {
             page.set_user_agent(user_agent).await?;
         }
-        self.open_on_page(url, &page).await?;
-        if let Some(duration) = param.duration {
-            sleep(Duration::from_millis(
-                (duration as i32 - self.timings.page_sleep as i32).max(1) as u64
-            )).await;
+        if !param.cookies.is_empty() {
+            page.set_cookies(param.cookies.clone()).await?;
         }
-        Ok(page)
-    }
-
-    /// Open a URL and keep the page open for a specified duration
-    ///
-    /// # Parameters
-    /// - `url`: The URL to navigate to
-    /// - `millis`: Duration to keep the page open in milliseconds
-    pub async fn open_with_duration(&self, url: &str, millis: u64) -> Result<Page, BrowserError> {
-        let page = self.open(url).await?;
-        sleep(Duration::from_millis(
-            (millis as i32 - self.timings.page_sleep as i32).max(1) as u64
-        )).await;
-        Ok(page)
-    }
-
-    /// Open a URL with predefined cookies
-    ///
-    /// # Parameters
-    /// - `url`: The URL to navigate to
-    /// - `cookies`: Vector of cookies to set
-    ///
-    /// # Returns
-    /// A `Result` containing the page or a `BrowserError`
-    ///
-    /// # Examples
-    /// ```rust
-    /// let cookies = vec![
-    ///     CookieParam { 
-    ///         name: "session_id".to_string(), 
-    ///         value: "abc123".to_string(), 
-    ///         ..Default::default() 
-    ///     }
-    /// ];
-    /// let page = session.open_with_cookies("https://example.com", cookies).await?;
-    /// ```
-    pub async fn open_with_cookies(&self, url: &str, cookies: Vec<CookieParam>) -> Result<Page, BrowserError> {
-        let page = self.new_page().await?;
-        page.set_cookies(cookies).await?;
+        if param.stealth_mode {
+            let _ = page.enable_stealth_mode().await;
+        }
         self.open_on_page(url, &page).await?;
+        sleep(
+            Duration::from_millis(param.duration)
+        ).await;
+        if let Some((selector, timeout)) = param.wait_for_element {
+            let _ = page.wait_for_element_with_timeout(
+                selector, timeout
+            ).await;
+        }
+
         Ok(page)
     }
 
-    /// Open a URL with cookies and keep the page open for a specified duration
-    ///
-    /// # Parameters
-    /// - `url`: The URL to navigate to
-    /// - `cookies`: Vector of CookieParam to set
-    /// - `millis`: Duration to keep the page open in milliseconds
-    ///
-    /// # Returns
-    /// A `Result` containing the page or a `BrowserError`
-    pub async fn open_with_cookies_and_duration(
-        &self, url: &str, cookies: Vec<CookieParam>, millis: u64
-    ) -> Result<Page, BrowserError> {
-        let page = self.open_with_cookies(url, cookies).await?;
-        sleep(Duration::from_millis(
-            (millis as i32 - self.timings.page_sleep as i32).max(1) as u64
-        )).await;
-        Ok(page)
-    }
-
-    /// Execute a function on a newly opened page
-    ///
-    /// # Parameters
-    /// - `url`: The URL to navigate to
-    /// - `f`: Async function to execute on the page
-    ///
-    /// # Returns
-    /// A `Result` containing the function's return value or a `BrowserError`
-    ///
-    /// # Examples
-    /// ```rust
-    /// let result = session.with_open("https://example.com", |page| async {
-    ///     let title = page.title().await?;
-    ///     Ok(title)
-    /// }).await?;
-    /// ```
-    pub async fn with_open<F, Fut, R>(&self, url: &str, f: F) -> Result<R, BrowserError>
-    where
-        F: FnOnce(&Page) -> Fut,
-        Fut: Future<Output = R>
-    {
-        let page = self.open(url).await?;
-        Ok(f(&page).await)
-    }
-
-    /// Execute two functions on a new page (pre-navigation and post-navigation)
-    ///
-    /// # Parameters
-    /// - `url`: The URL to navigate to
-    /// - `_f`: Function to execute before navigation
-    /// - `f_`: Function to execute after navigation
-    ///
-    /// # Returns
-    /// A `Result` containing the second function's return value or a `BrowserError`
-    ///
-    /// # Examples
-    /// ```rust
-    /// let result = session.with_new_open(
-    ///     "https://example.com", 
-    ///     |page| async { page.set_viewport(1920, 1080).await },
-    ///     |page| async { page.screenshot().await }
-    /// ).await?;
-    /// ```
-    pub async fn with_new_open<_F, F_, _Fut, Fut_, _R, R_>(
-        &self, url: &str, _f: _F, f_: F_
-    ) -> Result<R_, BrowserError>
-    where
-        _F: FnOnce(&Page) -> _Fut,
-        _Fut: Future<Output = _R>,
-        F_: FnOnce(&Page) -> Fut_,
-        Fut_: Future<Output = R_>,
-    {
-        let page = self.new_page().await?;
-        _f(&page).await;
-        let page = self.open_on_page(url, &page).await?;
-        Ok(f_(&page).await)
-    }
-
-    /// Set a proxy for the browser session
-    ///
-    /// # Parameters
-    /// - `proxy`: Proxy server address (username:password@host:port or host:port)
-    ///
-    /// # Returns
-    /// A `Result` indicating success or a `BrowserError`
-    ///
-    /// # Examples
-    /// ```rust
-    /// session.set_proxy("username:password@host:port").await?;
-    /// let myip = session.myip().await?;
-    /// println!("IP: {}", myip.ip);
-    /// 
-    /// session.reset_proxy().await?;
-    /// ```
     pub async fn set_proxy(&self, proxy: &str) -> Result<(), BrowserError> {
         if let Err(e) = self.browser.new_page(format!("chrome://set_proxy/{proxy}")).await {
             let error = BrowserError::from(e);
@@ -531,14 +286,12 @@ impl BrowserSession {
                 _ => { return Err(error); }
             }
         }
-        sleep(Duration::from_millis(self.timings.set_proxy_sleep)).await;
+        sleep(
+            Duration::from_millis(self.timings.set_proxy_sleep)
+        ).await;
         Ok(())
     }
 
-    /// Reset the browser's proxy settings
-    ///
-    /// # Returns
-    /// A `Result` indicating success or a `BrowserError`
     pub async fn reset_proxy(&self) -> Result<(), BrowserError> {
         if let Err(e) = self.browser.new_page("chrome://reset_proxy").await {
             let error = BrowserError::from(e);
@@ -547,14 +300,12 @@ impl BrowserSession {
                 _ => { return Err(error); }
             }
         }
-        sleep(Duration::from_millis(100)).await;
+        sleep(
+            Duration::from_millis(self.timings.action_sleep)
+        ).await;
         Ok(())
     }
 
-    /// Close all tabs except first
-    ///
-    /// # Returns
-    /// A `Result` indicating success or a `BrowserError`
     pub async fn close_tabs(&self) -> Result<(), BrowserError> {
         if let Err(e) = self.browser.new_page("chrome://close_tabs").await {
             let error = BrowserError::from(e);
@@ -563,14 +314,12 @@ impl BrowserSession {
                 _ => { return Err(error); }
             }
         }
-        sleep(Duration::from_millis(100)).await;
+        sleep(
+            Duration::from_millis(self.timings.action_sleep)
+        ).await;
         Ok(())
     }
 
-    /// Clear all browser data
-    ///
-    /// # Returns
-    /// A `Result` indicating success or a `BrowserError`
     pub async fn clear_data(&self) -> Result<(), BrowserError> {
         if let Err(e) = self.browser.new_page("chrome://clear_data").await {
             let error = BrowserError::from(e);
@@ -579,35 +328,18 @@ impl BrowserSession {
                 _ => { return Err(error); }
             }
         }
-        sleep(Duration::from_millis(150)).await;
-        Ok(())  
+        sleep(
+            Duration::from_millis(self.timings.action_sleep)
+        ).await;
+        Ok(())
     }
 
-    /// Retrieve the current IP address by querying an IP information API
-    ///
-    /// This method opens a page to https://api.myip.com/ and attempts to parse 
-    /// the JSON response containing IP address information.
-    ///
-    /// # Returns
-    /// A `Result` containing the `MyIP` struct with IP details or a `BrowserError`
-    ///
-    /// # Errors
-    /// Returns `BrowserError::Serialization` if:
-    /// - Unable to find the body element
-    /// - Unable to parse the JSON response
-    ///
-    /// # Examples
-    /// ```rust
-    /// let ip_info = session.myip().await?;
-    /// println!("IP: {}", ip_info.ip);
-    /// println!("Country: {}", ip_info.country);
-    /// ```
     pub async fn myip(&self) -> Result<MyIP, BrowserError> {
         let page = self.open("https://api.myip.com/").await?;
         let myip = page.find_element("body").await?
             .inner_text().await?
             .ok_or(BrowserError::Serialization)
-            .map(|s| 
+            .map(|s|
                 serde_json::from_str(&s)
                 .map_err(|_| BrowserError::Serialization)
             )?;
@@ -616,8 +348,41 @@ impl BrowserSession {
     }
 }
 
-/// List of user agents for randomization
-pub static USER_AGENT_LIST: [&str; 20] = [
+pub trait Wait {
+    const WAIT_SLEEP: u64 = 10;
+
+    async fn wait_for_element(&self, selector: &str) -> Result<(), BrowserError>;
+
+    async fn wait_for_element_with_timeout(&self, selector: &str, t: u64) -> Result<(), BrowserError>;
+}
+
+impl Wait for Page {
+    async fn wait_for_element(
+        &self, selector: &str
+    ) -> Result<(), BrowserError> {
+        while self.find_element(selector).await.is_err() {
+            sleep(
+                Duration::from_millis(Self::WAIT_SLEEP)
+            ).await;
+        }
+
+        Ok(())
+    }
+
+    async fn wait_for_element_with_timeout(
+        &self, selector: &str, t: u64
+    ) -> Result<(), BrowserError> {
+        timeout(
+            Duration::from_millis(t),
+            self.wait_for_element(selector)
+        ).await??;
+
+        Ok(())
+    }
+}
+
+
+static USER_AGENT_LIST: [&str; 20] = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -640,8 +405,7 @@ pub static USER_AGENT_LIST: [&str; 20] = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_14_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.1.2 Safari/605.1.15",
 ];
 
-/// Generate a random user agent
-pub fn get_random_user_agent() -> &'static str {
+pub fn random_user_agent() -> &'static str {
     let mut rng = rand::thread_rng();
     let index = rng.gen_range(0..USER_AGENT_LIST.len());
     USER_AGENT_LIST[index]
