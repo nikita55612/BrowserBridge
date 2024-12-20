@@ -7,40 +7,43 @@ use thiserror::Error;
 pub enum BrowserError {
     #[error("failed to create page")]
     PageCreation,
-    
+
     #[error("websocket communication failed")]
     WebSocket,
-    
+
     #[error("connection timeout")]
     Timeout,
-    
+
     #[error("network I/O error")]
     NetworkIO,
-    
+
     #[error("browser launch failed")]
     BrowserLaunch,
-    
+
     #[error("frame not found")]
     FrameNotFound,
-    
+
     #[error("navigation failed")]
     Navigation,
-    
+
     #[error("serialization error")]
     Serialization,
-    
+
     #[error("decoding error")]
     Decoding,
-    
+
     #[error("chrome internal error")]
     ChromeInternal,
-    
+
     #[error("javascript exception")]
     JavaScriptError,
-    
+
     #[error("invalid URL")]
     InvalidUrl,
-    
+
+    #[error("invalid browser config")]
+    BuildBrowserConfigError,
+
     #[error("unknown error")]
     Unknown,
 }
@@ -55,8 +58,8 @@ impl From<CdpError> for BrowserError {
             CdpError::NoResponse => BrowserError::Timeout,
             CdpError::UnexpectedWsMessage(_) => BrowserError::WebSocket,
             CdpError::ChannelSendError(_) => BrowserError::NetworkIO,
-            CdpError::LaunchExit(_, _) | 
-                CdpError::LaunchTimeout(_) | 
+            CdpError::LaunchExit(_, _) |
+                CdpError::LaunchTimeout(_) |
                 CdpError::LaunchIo(_, _) => BrowserError::BrowserLaunch,
             CdpError::Timeout => BrowserError::Timeout,
             CdpError::FrameNotFound(_) => BrowserError::FrameNotFound,
@@ -75,4 +78,3 @@ impl From<tokio::time::error::Elapsed> for BrowserError {
         BrowserError::Timeout
     }
 }
-
