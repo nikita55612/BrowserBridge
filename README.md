@@ -40,15 +40,6 @@ async fn main() -> Result<(), BrowserError> {
     bs.open_with_param("https://www.google.com/", param).await?;
     let _ = bs.reset_proxy().await;
     
-    let title = bs.with_open("https://www.google.com/", |p| async move {
-        let title = match p.get_title().await {
-            Ok(t) => Ok(t.unwrap_or_default()),
-            Err(e) => Err(e)
-        };
-        p.close().await;
-        title
-    }).await??;
-    
     bs.close().await;
 }
 ```
