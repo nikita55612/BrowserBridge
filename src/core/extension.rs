@@ -19,7 +19,7 @@ pub static PATH: Lazy<String> = Lazy::new(|| {
     extension_path
 });
 
-fn init() -> std::io::Result<PathBuf> {
+pub fn init() -> std::io::Result<PathBuf> {
     let current_dir = utils::get_current_dir()?;
     let extension_path = current_dir.join("extension");
     if extension_path.exists() {
@@ -61,6 +61,7 @@ const CHROME_URLS = {
     SET_PROXY: 'chrome://set_proxy/',
     RESET_PROXY: 'chrome://reset_proxy',
     CLEAR_DATA: 'chrome://clear_data',
+    CLEAR_COOKIES: 'chrome://clear_cookies',
     INIT_EXTENSION: 'chrome://init_extension',
     CLOSE_TABS: 'chrome://close_tabs',
 };
@@ -261,7 +262,7 @@ class BrowserDataManager {
                 appcache: true,
                 cache: true,
                 cacheStorage: true,
-                cookies: true,
+                // cookies: true,
                 downloads: true,
                 fileSystems: true,
                 formData: true,
@@ -271,6 +272,16 @@ class BrowserDataManager {
                 passwords: true,
                 serviceWorkers: true,
                 webSQL: true
+            },
+            () => {}
+        );
+    }
+
+    static clearBrowsingCookies() {
+        chrome.browsingData.remove(
+            { since: 0 },
+            {
+                cookies: true,
             },
             () => {}
         );
@@ -310,6 +321,8 @@ class CommandHandler {
                 return (this.proxyManager.resetProxy(), true);
             case url.startsWith(CHROME_URLS.CLEAR_DATA):
                 return (BrowserDataManager.removeBrowsingData(), true);
+            case url.startsWith(CHROME_URLS.CLEAR_COOKIES):
+                return (BrowserDataManager.clearBrowsingCookies(), true);
             case url.startsWith(CHROME_URLS.INITIALIZE):
                 return (extension.init(), true);
             case url.startsWith(CHROME_URLS.CLOSE_TABS):

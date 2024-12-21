@@ -26,7 +26,7 @@ pub struct MyIP {
     pub cc: String,
 }
 
-pub static DEFAULT_ARGS: [&str; 16] = [
+pub static DEFAULT_ARGS: [&str; 23] = [
     "--disable-background-networking",
     "--enable-features=NetworkService,NetworkServiceInProcess",
     "--disable-client-side-phishing-detection",
@@ -42,7 +42,14 @@ pub static DEFAULT_ARGS: [&str; 16] = [
     "--lang=en_US",
     "--no-sandbox",
     "--disable-gpu",
-    "--disable-smooth-scrolling"
+    "--disable-smooth-scrolling",
+    "--blink-settings=imagesEnabled=false",
+    "--enable-lazy-image-loading",
+    "--disable-image-animation-resync",
+    "--disable-features=TranslateUI",
+    "--disable-translate",
+    "--disable-logging",
+    "--disable-histogram-customizer"
 ];
 
 #[derive(Clone, Debug)]
