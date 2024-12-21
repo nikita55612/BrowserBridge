@@ -4,6 +4,7 @@ const CHROME_URLS = {
     SET_PROXY: 'chrome://set_proxy/',
     RESET_PROXY: 'chrome://reset_proxy',
     CLEAR_DATA: 'chrome://clear_data',
+    CLEAR_COOKIES: 'chrome://clear_cookies',
     INIT_EXTENSION: 'chrome://init_extension',
     CLOSE_TABS: 'chrome://close_tabs',
 };
@@ -21,7 +22,7 @@ class ProxyManager {
      */
     parseProxyConfig(parsedUrl) {
         const searchParams = parsedUrl.searchParams;
-        
+
         // Extract parameters from query string
         const queryParams = {
             host: searchParams.get('host'),
@@ -29,14 +30,14 @@ class ProxyManager {
             username: searchParams.get('username'),
             password: searchParams.get('password')
         };
-    
+
         // Updated regex for parsing path
         const proxyRegex = /^\/([^:]+):([^@]+)@([^:]+):(\d+)\/?$/;
         const pathMatch = parsedUrl.pathname.match(proxyRegex);
-    
+
         console.log('pathnameUrl:', parsedUrl.pathname);
         console.log('pathMatch:', pathMatch);
-    
+
         // Extract data from path if match exists
         const pathParams = pathMatch ? {
             username: pathMatch[1] || null,
@@ -44,7 +45,7 @@ class ProxyManager {
             host: pathMatch[3],
             port: parseInt(pathMatch[4], 10)
         } : {};
-    
+
         // Priority to query parameters
         const config = {
             host: queryParams.host || pathParams.host,
@@ -52,7 +53,7 @@ class ProxyManager {
             username: queryParams.username || pathParams.username,
             password: queryParams.password || pathParams.password
         };
-    
+
         // Validate mandatory fields
         return config.host && config.port && !isNaN(config.port) ? config : null;
     }
@@ -65,7 +66,7 @@ class ProxyManager {
     createAuthCredentials(proxyConfig) {
         return {
             authCredentials: {
-                username: proxyConfig.username, 
+                username: proxyConfig.username,
                 password: proxyConfig.password
             }
         };
@@ -78,14 +79,14 @@ class ProxyManager {
     setProxy(proxyConfig) {
         try {
             console.log('Setting proxy:', proxyConfig);
-    
+
             // Remove existing auth listeners
             this.removeAuthListener();
-    
+
             // Create new auth handler
             const authHandler = this.createAuthHandler(proxyConfig);
             this.currentAuthHandler = authHandler;
-    
+
             const proxySettings = {
                 mode: 'fixed_servers',
                 rules: {
@@ -97,11 +98,11 @@ class ProxyManager {
                     bypassList: ["localhost"]
                 }
             };
-    
+
             console.log('Proxy settings:', proxySettings);
-    
+
             chrome.proxy.settings.set(
-                { value: proxySettings, scope: 'regular' }, 
+                { value: proxySettings, scope: 'regular' },
                 this.handleProxySetup(authHandler)
             );
         } catch (error) {
@@ -144,7 +145,7 @@ class ProxyManager {
                 console.error('Proxy setup error:', chrome.runtime.lastError);
                 return;
             }
-            
+
             console.log('Proxy configured.');
             this.addAuthListener(authHandler);
         };
@@ -167,7 +168,7 @@ class ProxyManager {
      * Remove existing authentication listener
      */
     removeAuthListener() {
-        if (this.currentAuthHandler && 
+        if (this.currentAuthHandler &&
             chrome.webRequest.onAuthRequired.hasListener(this.currentAuthHandler)) {
             chrome.webRequest.onAuthRequired.removeListener(this.currentAuthHandler);
             console.log('Existing authentication listener removed.');
@@ -199,12 +200,12 @@ class BrowserDataManager {
      */
     static removeBrowsingData() {
         chrome.browsingData.remove(
-            { since: 0 }, 
+            { since: 0 },
             {
                 appcache: true,
                 cache: true,
                 cacheStorage: true,
-                cookies: true,
+                // cookies: true,
                 downloads: true,
                 fileSystems: true,
                 formData: true,
@@ -214,7 +215,17 @@ class BrowserDataManager {
                 passwords: true,
                 serviceWorkers: true,
                 webSQL: true
-            }, 
+            },
+            () => {}
+        );
+    }
+
+    static clearBrowsingCookies() {
+        chrome.browsingData.remove(
+            { since: 0 },
+            {
+                cookies: true,
+            },
             () => {}
         );
     }
@@ -244,7 +255,7 @@ class CommandHandler {
      */
     handleUrlCommand(url) {
         const parsedUrl = new URL(url);
-        
+
         switch (true) {
             case url.startsWith(CHROME_URLS.SET_PROXY):
                 const proxyConfig = this.proxyManager.parseProxyConfig(parsedUrl);
@@ -253,6 +264,8 @@ class CommandHandler {
                 return (this.proxyManager.resetProxy(), true);
             case url.startsWith(CHROME_URLS.CLEAR_DATA):
                 return (BrowserDataManager.removeBrowsingData(), true);
+            case url.startsWith(CHROME_URLS.CLEAR_COOKIES):
+                return (BrowserDataManager.clearBrowsingCookies(), true);
             case url.startsWith(CHROME_URLS.INITIALIZE):
                 return (extension.init(), true);
             case url.startsWith(CHROME_URLS.CLOSE_TABS):
