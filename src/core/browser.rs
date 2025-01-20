@@ -7,7 +7,10 @@ use tokio::{
     time::{sleep, timeout}
 };
 use chromiumoxide::{
-    cdp::browser_protocol::network::CookieParam,
+    cdp::browser_protocol::{
+        //emulation::SetGeolocationOverrideParams,
+        network::CookieParam
+    },
     browser::HeadlessMode,
     Browser,
     BrowserConfig,
@@ -26,30 +29,15 @@ pub struct MyIP {
     pub cc: String,
 }
 
-pub static DEFAULT_ARGS: [&str; 23] = [
-    "--disable-background-networking",
-    "--enable-features=NetworkService,NetworkServiceInProcess",
-    "--disable-client-side-phishing-detection",
+pub static DEFAULT_ARGS: [&str; 8] = [
+    "--disable-blink-features=AutomationControlled",
     "--disable-default-apps",
-    "--disable-dev-shm-usage",
-    "--disable-breakpad",
-    "--disable-features=TranslateUI",
-    "--disable-prompt-on-repost",
     "--no-first-run",
     "--disable-sync",
-    "--force-color-profile=srgb",
-    "--enable-blink-features=IdleDetection",
     "--lang=en_US",
-    "--no-sandbox",
-    "--disable-gpu",
+    "--no-default-browser-check",
     "--disable-smooth-scrolling",
-    "--blink-settings=imagesEnabled=false",
-    "--enable-lazy-image-loading",
-    "--disable-image-animation-resync",
-    "--disable-features=TranslateUI",
-    "--disable-translate",
-    "--disable-logging",
-    "--disable-histogram-customizer"
+    "--disable-features=TranslateUI"
 ];
 
 #[derive(Clone, Debug)]
@@ -57,7 +45,7 @@ pub struct BrowserTimings {
     pub launch_sleep: u64,
     pub set_proxy_sleep: u64,
     pub action_sleep: u64,
-    pub wait_page_timeout: u64,
+    pub page_goto_timeout: u64
 }
 
 impl Default for BrowserTimings {
@@ -66,24 +54,21 @@ impl Default for BrowserTimings {
             launch_sleep: 280,
             set_proxy_sleep: 180,
             action_sleep: 80,
-            wait_page_timeout: 700
+            page_goto_timeout: 1400
         }
     }
-}
-
-pub struct BrowserSession {
-    pub browser: Browser,
-    pub handle: JoinHandle<()>,
-    pub timings: BrowserTimings,
 }
 
 #[derive(Clone, Debug)]
 pub struct PageParam<'a> {
     pub proxy: Option<&'a str>,
-    pub wait_for_element: Option<(&'a str, u64)>,
+    pub wait_for_el: Option<(&'a str, u64)>,
+    pub wait_for_el_until: Option<(&'a str, &'a str, u64)>,
     pub user_agent: Option<&'a str>,
     pub cookies: Vec<CookieParam>,
-    pub stealth_mode: bool,
+    //pub geolocation: Option<(f64, f64)>,
+    pub wait_open_on_page: Option<u64>,
+    pub wait_for_navigation: Option<u64>,
     pub duration: u64
 }
 
@@ -91,23 +76,27 @@ impl<'a> Default for PageParam<'a> {
     fn default() -> Self {
         Self {
             proxy: None,
-            wait_for_element: None,
+            wait_for_el: None,
+            wait_for_el_until: None,
             user_agent: None,
             cookies: Vec::new(),
-            stealth_mode: false,
+            //geolocation: None,
+            wait_open_on_page: None,
+            wait_for_navigation: None,
             duration: 0
         }
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct BrowserSessionConfig {
     pub executable: Option<String>,
+    pub user_data_dir: Option<String>,
     pub args: Vec<String>,
     pub headless: HeadlessMode,
     pub sandbox: bool,
     pub extensions: Vec<String>,
     pub incognito: bool,
-    pub user_data_dir: Option<String>,
     pub port: u16,
     pub launch_timeout: u64,
     pub request_timeout: u64,
@@ -119,6 +108,7 @@ impl Default for BrowserSessionConfig {
     fn default() -> Self {
         Self {
             executable: None,
+            user_data_dir: None,
             args: DEFAULT_ARGS.into_iter()
                 .map(|v| v.into())
                 .collect(),
@@ -126,7 +116,6 @@ impl Default for BrowserSessionConfig {
             sandbox: false,
             extensions: Vec::new(),
             incognito: false,
-            user_data_dir: None,
             port: 0,
             launch_timeout: 1500,
             request_timeout: 2000,
@@ -182,6 +171,12 @@ impl FromSessionConfig for BrowserSessionConfig {
     }
 }
 
+pub struct BrowserSession {
+    pub browser: Browser,
+    pub handle: JoinHandle<()>,
+    pub timings: BrowserTimings,
+}
+
 impl BrowserSession {
     pub async fn launch(bsc: BrowserSessionConfig) -> Result<Self, BrowserError> {
         let timings = bsc.timings.clone();
@@ -232,10 +227,10 @@ impl BrowserSession {
     }
 
     pub async fn open_on_page<'a>(&self, url: &str, page: &'a Page) -> Result<(), BrowserError> {
-        page.goto(url).await?;
+        //page.goto(url).await?;
         let _ = timeout(
-            Duration::from_millis(self.timings.wait_page_timeout),
-            page.wait_for_navigation()
+            Duration::from_millis(self.timings.page_goto_timeout),
+            page.goto(url)
         ).await;
 
         Ok(())
@@ -269,16 +264,42 @@ impl BrowserSession {
         if !param.cookies.is_empty() {
             page.set_cookies(param.cookies.clone()).await?;
         }
-        if param.stealth_mode {
-            let _ = page.enable_stealth_mode().await;
+        /*
+        if let Some(geolocation) = param.geolocation {
+            page.emulate_geolocation(
+                SetGeolocationOverrideParams {
+                    latitude: Some(geolocation.0),
+                    longitude: Some(geolocation.1),
+                    accuracy: None
+                }
+            ).await?;
         }
-        self.open_on_page(url, &page).await?;
+         */
+        if param.wait_open_on_page.is_some() {
+            let _ = timeout(
+                Duration::from_millis(param.wait_open_on_page.unwrap()),
+                self.open_on_page(url, &page)
+            ).await;
+        } else {
+            self.open_on_page(url, &page).await?;
+        }
+        if let Some(wait_timeout) = param.wait_for_navigation {
+            let _ = timeout(
+                Duration::from_millis(wait_timeout),
+                page.wait_for_navigation()
+            ).await;
+        }
         sleep(
             Duration::from_millis(param.duration)
         ).await;
-        if let Some((selector, timeout)) = param.wait_for_element {
-            let _ = page.wait_for_element_with_timeout(
+        if let Some((selector, timeout)) = param.wait_for_el {
+            let _ = page.wait_for_el_with_timeout(
                 selector, timeout
+            ).await;
+        }
+        if let Some((selector, until_selector, timeout)) = param.wait_for_el_until {
+            let _ = page.wait_for_el_until_with_timeout(
+                selector, until_selector, timeout
             ).await;
         }
 
@@ -286,7 +307,8 @@ impl BrowserSession {
     }
 
     pub async fn set_proxy(&self, proxy: &str) -> Result<(), BrowserError> {
-        if let Err(e) = self.browser.new_page(format!("chrome://set_proxy/{proxy}")).await {
+        if let Err(e) = self.browser
+        .new_page(format!("chrome://set_proxy/{proxy}")).await {
             let error = BrowserError::from(e);
             match error {
                 BrowserError::NetworkIO => {},
@@ -300,7 +322,8 @@ impl BrowserSession {
     }
 
     pub async fn reset_proxy(&self) -> Result<(), BrowserError> {
-        if let Err(e) = self.browser.new_page("chrome://reset_proxy").await {
+        if let Err(e) = self.browser
+        .new_page("chrome://reset_proxy").await {
             let error = BrowserError::from(e);
             match error {
                 BrowserError::NetworkIO => {},
@@ -314,7 +337,8 @@ impl BrowserSession {
     }
 
     pub async fn close_tabs(&self) -> Result<(), BrowserError> {
-        if let Err(e) = self.browser.new_page("chrome://close_tabs").await {
+        if let Err(e) = self.browser
+        .new_page("chrome://close_tabs").await {
             let error = BrowserError::from(e);
             match error {
                 BrowserError::NetworkIO => {},
@@ -328,7 +352,8 @@ impl BrowserSession {
     }
 
     pub async fn clear_data(&self) -> Result<(), BrowserError> {
-        if let Err(e) = self.browser.new_page("chrome://clear_data").await {
+        if let Err(e) = self.browser
+        .new_page("chrome://clear_data").await {
             let error = BrowserError::from(e);
             match error {
                 BrowserError::NetworkIO => {},
@@ -358,31 +383,56 @@ impl BrowserSession {
 pub trait Wait {
     const WAIT_SLEEP: u64 = 10;
 
-    async fn wait_for_element(&self, selector: &str) -> Result<(), BrowserError>;
+    async fn wait_for_el(&self, selector: &str);
 
-    async fn wait_for_element_with_timeout(&self, selector: &str, t: u64) -> Result<(), BrowserError>;
+    async fn wait_for_el_until(&self, selector: &str, until_selector: &str);
+
+    async fn wait_for_el_with_timeout(&self, selector: &str, t: u64) -> Result<(), BrowserError>;
+
+    async fn wait_for_el_until_with_timeout(&self, selector: &str, until_selector: &str, t: u64) -> Result<(), BrowserError>;
 }
 
 impl Wait for Page {
-    async fn wait_for_element(
-        &self, selector: &str
-    ) -> Result<(), BrowserError> {
+    async fn wait_for_el(&self, selector: &str) {
         while self.find_element(selector).await.is_err() {
             sleep(
                 Duration::from_millis(Self::WAIT_SLEEP)
             ).await;
         }
-
-        Ok(())
     }
 
-    async fn wait_for_element_with_timeout(
+    async fn wait_for_el_until(&self, selector: &str, until_selector: &str) {
+        while self.find_element(selector).await.is_err() {
+            sleep(
+                Duration::from_millis(Self::WAIT_SLEEP)
+            ).await;
+            if self.find_element(until_selector).await.is_ok() {
+                break;
+            }
+            sleep(
+                Duration::from_millis(Self::WAIT_SLEEP)
+            ).await;
+        }
+    }
+
+    async fn wait_for_el_with_timeout(
         &self, selector: &str, t: u64
     ) -> Result<(), BrowserError> {
         timeout(
             Duration::from_millis(t),
-            self.wait_for_element(selector)
-        ).await??;
+            self.wait_for_el(selector)
+        ).await?;
+
+        Ok(())
+    }
+
+    async fn wait_for_el_until_with_timeout(
+        &self, selector: &str, until_selector: &str, t: u64
+    ) -> Result<(), BrowserError> {
+        timeout(
+            Duration::from_millis(t),
+            self.wait_for_el_until(selector, until_selector)
+        ).await?;
 
         Ok(())
     }
@@ -398,15 +448,15 @@ static USER_AGENT_LIST: [&str; 20] = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 12.6; rv:116.0) Gecko/20100101 Firefox/116.0",
     "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:118.0) Gecko/20100101 Firefox/118.0",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 11_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Safari/605.1.15",
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 16_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
-    "Mozilla/5.0 (iPad; CPU OS 16_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1",
-    "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 12; SM-A515F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 11.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_0_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Linux; U; Android 12; en-US; SM-T870 Build/SP1A.210812.016) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/100.0.4896.127 Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 11; Mi 10T Pro Build/RKQ1.200826.002) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/101.0.4951.41 Mobile Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Safari/605.1.15",
     "Mozilla/5.0 (Windows NT 10.0; rv:110.0) Gecko/20100101 Firefox/110.0",
     "Mozilla/5.0 (X11; Linux x86_64; rv:91.0) Gecko/20100101 Firefox/91.0",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_14_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.1.2 Safari/605.1.15",

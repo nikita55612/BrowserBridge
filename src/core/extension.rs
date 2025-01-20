@@ -1,7 +1,21 @@
 use std::path::PathBuf;
 use once_cell::sync::Lazy;
-use crate::utils;
+use std::io::Write;
 
+
+pub fn create_dir(path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
+    std::fs::create_dir(path)
+}
+
+pub fn get_current_dir() -> std::io::Result<std::path::PathBuf> {
+    std::env::current_dir()
+}
+
+pub fn write_to_file(path: impl AsRef<std::path::Path>, content: &str) -> std::io::Result<()> {
+    let mut file = std::fs::File::create(path)?;
+    file.write_all(content.as_bytes())?;
+    file.flush()
+}
 
 pub static PATH: Lazy<String> = Lazy::new(|| {
     let path_error = || {
@@ -20,16 +34,16 @@ pub static PATH: Lazy<String> = Lazy::new(|| {
 });
 
 pub fn init() -> std::io::Result<PathBuf> {
-    let current_dir = utils::get_current_dir()?;
+    let current_dir = get_current_dir()?;
     let extension_path = current_dir.join("extension");
     if extension_path.exists() {
         return Ok(extension_path);
     }
-    utils::create_dir(&extension_path)?;
+    create_dir(&extension_path)?;
     let background_path = extension_path.join("background.js");
     let manifest_path = extension_path.join("manifest.json");
-    utils::write_to_file(background_path, BACKGROUND_JS)?;
-    utils::write_to_file(manifest_path, MANIFEST_JSON)?;
+    write_to_file(background_path, BACKGROUND_JS)?;
+    write_to_file(manifest_path, MANIFEST_JSON)?;
     Ok(extension_path)
 }
 
